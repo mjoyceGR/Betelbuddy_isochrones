@@ -5,7 +5,7 @@
 #
 #########################################
 import numpy as np
-
+import mesa_reader as mr 
 
 def find_nearest(value, array):
     index = np.abs(array - value).argmin()
@@ -25,6 +25,17 @@ def find_right_nearest(value, array):
         raise ValueError("No array value lies to the right of the target.")
     return valid[0]
 
+def find_interpolated_nearest(value, array, number_of_points=1000):
+    left_index = find_left_nearest(value, array)
+    right_index = find_right_nearest(value, array)
+
+    interpolated_array = np.linspace(
+        array[left_index],
+        array[right_index],
+        number_of_points
+    )
+    nearest_index = find_nearest(value, interpolated_array)
+    return interpolated_array[nearest_index]
 
 def which_color(target_age):
     if target_age==5:
@@ -38,16 +49,27 @@ def which_color(target_age):
     return color
 
 
-def find_interpolated_nearest(value, array, number_of_points=1000):
-    left_index = find_left_nearest(value, array)
-    right_index = find_right_nearest(value, array)
+def which_columns(f,filter_system):
+    ## ingests file, filter system; returns two mr.data arrays
+    md = mr.MesaData(f)
+    
+    if filter_system =='alopeke':
+        x = md.log_Teff
+        y = md.## column here
+    elif filter_system=='zimpol':
+        x = md.log_Teff
+        y = md.## column here
+    elif filter_system=='HST_stis_FUV':
+        x = md.log_Teff
+        y = md.## column here
+    elif filter_system=='B_band':
+        x = md.log_Teff
+        y = md.## column here
+    else:
+        log_Teff = md.log_Teff
+        log_L = md.log_L
 
-    interpolated_array = np.linspace(
-        array[left_index],
-        array[right_index],
-        number_of_points
-    )
+        x = log_Teff #10.0**log_Teff
+        y = log_L
 
-    nearest_index = find_nearest(value, interpolated_array)
-
-    return interpolated_array[nearest_index]
+    return x, y
