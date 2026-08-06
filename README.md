@@ -1,2 +1,2 @@
 # Betelbuddy_isochrones
-isochrone constructor for Betelbuddy parameters using MESA Custom Colors
+Isochrone constructor for Betelbuddy parameters using MESA Custom Colors. Hopefully a reproducibility package will go here. 
