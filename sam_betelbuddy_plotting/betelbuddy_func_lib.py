@@ -92,6 +92,11 @@ def print_first_file_columns(directories):
         except Exception as e:
             print(f"An error occurred reading {first_file}: {e}\n")
 
+def calc_Mbol(log_L):
+    # Fixed calculation of bolometric magnitude from luminosity
+    M_bol = 4.74-2.5*log_L
+    return M_bol
+
 
 def calc_filter_apparent_mag(M_bol, BC_filter, distance_pc):
     """
@@ -111,11 +116,33 @@ def calc_filter_apparent_mag(M_bol, BC_filter, distance_pc):
         
     # 1. Convert absolute bolometric to absolute filter magnitude
     M_filter = M_bol - BC_filter
+    # print(f"M_bol_filter: {M_filter}")
     
     # 2. Apply distance modulus
     m_apparent = M_filter + 5 * np.log10(distance_pc) - 5
     
     return m_apparent
+
+def calc_filt_bol_mag(M_bol, BC_filter):
+    # Converts from bolometric Mag to filter Mag
+    M_filter = M_bol + BC_filter
+    return M_filter
+
+def add_filter_bol_column(df, M_bol_col, BC_col, new_col_name):
+    """
+    Calculates bolometric filter magnitudes from arrays of M_bol and BC, 
+    and adds them to the existing DataFrame.
+    """
+    # axis=1 tells Pandas to apply the function row by row
+    df[new_col_name] = df.apply(
+        lambda row: calc_filt_bol_mag(
+            np.array(row[M_bol_col]), 
+            np.array(row[BC_col])
+        ), 
+        axis=1
+    )
+    
+    return df
 
 
 def add_filter_apparent_column(df, M_bol_col, BC_col, new_col_name, distance_pc):
@@ -154,10 +181,11 @@ def load_isochrone_data(history_directories):
     return dataframes
 
 
-def build_isochrone_multi(df, ax, target_ages, x_var, y_var, x_title, y_title, target_masses=None, invert_y=True, invert_x=False):
+def build_isochrone_multi(df, ax, target_ages, x_var, y_var, x_title, y_title, target_masses=None, invert_y=True, 
+                          invert_x=False, inset_zoom_lims=None):
     """
-    Plots multiple isochrones (target_ages) colored by stellar mass. 
-    Overlays full evolutionary tracks for specific target_masses in the background.
+    Plots multiple isochrones (target_ages) as thin background lines. 
+    Overlays full evolutionary tracks for specific target_masses in thick, colored lines.
 
     Returns axes element for plotting in larger figure
     """
@@ -165,7 +193,10 @@ def build_isochrone_multi(df, ax, target_ages, x_var, y_var, x_title, y_title, t
     all_y_vals = []
     last_colored_line = None
 
-    # --- 1. Plot Evolutionary Tracks (Mass Tracks) in Background ---
+    # --- 1. Plot Evolutionary Tracks (Mass Tracks) as Thick Colored Lines ---
+    tracks_to_plot = []
+    plotted_masses = []
+
     if target_masses is not None:
         for index, row in df.iterrows():
             mass = row['Mass']
@@ -179,7 +210,7 @@ def build_isochrone_multi(df, ax, target_ages, x_var, y_var, x_title, y_title, t
                     ages = np.array(row['star_age'])
 
                     # 2. Hardcode your lower age bound here (e.g., 1e6 for 1 Myr)
-                    min_age_limit = 1e6  
+                    min_age_limit = 0.5e6  
 
                     # 3. Create a mask of indices where the age is above the limit
                     valid_idx = ages >= min_age_limit
@@ -189,17 +220,30 @@ def build_isochrone_multi(df, ax, target_ages, x_var, y_var, x_title, y_title, t
                     y_track = np.array(row[y_var])[valid_idx]
 
                     # Only plot if there is data left after the cut
-                    if len(x_track) > 0:
-                        # Plot the truncated age evolution as a faint line
-                        ax.plot(x_track, y_track, color='grey', alpha=0.5, zorder=1, linewidth=1.5)
-
+                    if len(x_track) > 1:
                         # Expand our bounding box logic to ensure the whole track is visible
                         all_x_vals.extend(x_track)
                         all_y_vals.extend(y_track)
 
-    # --- 2. Plot the Isochrones ---
+                        # Save the track data to plot all at once later
+                        tracks_to_plot.append((x_track, y_track))
+                        plotted_masses.append(mass_val)
+
+        # Build colormap and plot the standard lines
+        if plotted_masses:
+            # Create a dynamic color normalizer based on the min/max masses found
+            norm = plt.Normalize(vmin=min(plotted_masses), vmax=max(plotted_masses))
+            cmap = plt.get_cmap('viridis')
+            
+            for (x_trk, y_trk), m_val in zip(tracks_to_plot, plotted_masses):
+                # Standard line plot, assigning the mapped color directly
+                ax.plot(x_trk, y_trk, color=cmap(norm(m_val)), linewidth=4.5, alpha=0.9, zorder=2)
+                
+            # Create a "dummy" ScalarMappable so fig.colorbar() still works perfectly
+            last_colored_line = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
+
+    # --- 2. Plot the Isochrones as Thin Grey Lines ---
     sorted_ages = sorted(target_ages)
-    total_ages = len(sorted_ages)
 
     # Loop through each target age provided in the list
     for target_age in target_ages:
@@ -242,34 +286,43 @@ def build_isochrone_multi(df, ax, target_ages, x_var, y_var, x_title, y_title, t
         sorted_indices = np.argsort(masses)
         x_vals = np.array(isochrone_x_vals)[sorted_indices]
         y_vals = np.array(isochrone_y_vals)[sorted_indices]
-        m_vals = np.array(masses)[sorted_indices]
 
         # Collect points for scaling axis limits
         all_x_vals.extend(x_vals)
         all_y_vals.extend(y_vals)
 
-        # Build the LineCollection for this age
-        points = np.array([x_vals, y_vals]).T.reshape(-1, 1, 2)
-        segments = np.concatenate([points[:-1], points[1:]], axis=1)
+        # Plot the isochrone as a faint background line
+        if len(x_vals) > 1:
+            ax.plot(x_vals, y_vals, color='black', alpha=0.8, zorder=1, linewidth=2.0)
 
-        lc = LineCollection(segments, cmap='viridis', linewidth=5, alpha=0.9, zorder=2)
-        lc.set_array(m_vals)
-        colored_line = ax.add_collection(lc)
-        last_colored_line = colored_line  # Save reference for the colorbar
-
-        # --- Add Age Label at the Highest Mass Member ---
-        # The highest mass member is the last element in the sorted arrays
-        high_mass_x = x_vals[0]
-        high_mass_y = y_vals[0]
-        age_label = f"{target_age/1e6:.0f} Myr"
-
-        ax.text(
-            high_mass_x, high_mass_y, f"  {age_label}", 
-            fontsize=10, fontweight='bold', color='black',
-            verticalalignment='center', horizontalalignment='left',
-            zorder=3
-        )
-
+        # --- Dynamic Age Label Placement (Inset Only) ---
+        if inset_zoom_lims is not None:
+            # Unpack the limits and find the absolute min and max
+            x1, x2, y1, y2 = inset_zoom_lims
+            x_min, x_max = min(x1, x2), max(x1, x2)
+            y_min, y_max = min(y1, y2), max(y1, y2)
+            
+            # Create a mask to find only the points that fall inside the zoom box
+            inside_mask = (x_vals >= x_min) & (x_vals <= x_max) & (y_vals >= y_min) & (y_vals <= y_max)
+            
+            # If any part of this age track is inside the box, label it
+            if np.any(inside_mask):
+                x_inside = x_vals[inside_mask]
+                y_inside = y_vals[inside_mask]
+                
+                # Pick the median index to place the label in the center of the segment
+                mid_idx = len(x_inside) // 2
+                label_x = x_inside[mid_idx]
+                label_y = y_inside[mid_idx]
+                
+                age_label = f"{target_age/1e6:.1f} Myr"
+                
+                ax.text(
+                    label_x, label_y, f"  {age_label}", 
+                    fontsize=10, fontweight='bold', color='black',
+                    verticalalignment='center', horizontalalignment='left',
+                    zorder=3
+                )
 
     # Scale the axis limits to encompass all points across tracks and ages
     if all_x_vals and all_y_vals:
@@ -291,6 +344,7 @@ def build_isochrone_multi(df, ax, target_ages, x_var, y_var, x_title, y_title, t
     ax.grid(True, linestyle='--', alpha=0.7)
 
     # Force the axes to always show 1 decimal place
+    from matplotlib.ticker import FormatStrFormatter
     ax.yaxis.set_major_formatter(FormatStrFormatter('%.1f'))
     ax.xaxis.set_major_formatter(FormatStrFormatter('%.1f'))
     
@@ -300,6 +354,7 @@ def build_isochrone_multi(df, ax, target_ages, x_var, y_var, x_title, y_title, t
 def plot_four_panel(dataframes, filters, target_ages, distance_pc=168, target_masses=None, savename=None, savedir=None):
     """
     Creates a 2x2 grid of isochrone plots from a pre-loaded list of DataFrames.
+    Includes optional labeled shaded regions for filter/detection bounds.
     """
     # Initialize the 2x2 figure grid
     fig, axes = plt.subplots(2, 2, figsize=(10, 10))
@@ -308,39 +363,117 @@ def plot_four_panel(dataframes, filters, target_ages, distance_pc=168, target_ma
     # Iterate over the 4 axes, the 4 DataFrames in memory, and the 4 filter settings
     for ax, df, filt in zip(axes, dataframes, filters):
 
+        # Add REAL bolometric magnitude column:
+        df['M_bol'] = calc_Mbol(df['log_L'])
+
         # Calculate Apparent magnitude column
-        add_filter_apparent_column(df, 'Mag_bol', filt['x_var'], 'Mag_app', distance_pc)
+        if filt['y_var'] == 'Mag_bol_filter':
+            add_filter_bol_column(df, 'M_bol', filt['filter'], 'Mag_bol_filter')
         
-        # Call the updated isochrone function and pass the 'ax' object
+        # --- 1. Plot the Main Axis ---
         scatter = build_isochrone_multi(
             df=df, 
             ax=ax, 
             target_ages=target_ages, 
+            target_masses=target_masses,
             x_var=filt['x_var'], 
             y_var=filt['y_var'], 
             x_title=filt['x_title'], 
             y_title=filt['y_title'], 
             invert_y=filt.get('invert_y', True), 
-            invert_x=filt.get('invert_x', False),
-            target_masses=target_masses
+            invert_x=filt.get('invert_x', False)
         )
         
-    # --- Figure-Level Formatting (The Manual Control Method) ---
-    
-    # Push the subplots down by lowering 'top' to 0.9 (reserving 10% of the space)
+        # --- 2. Add the Inset Zoom (if specified in the filter) ---
+        axins = None
+        if 'inset_pos' in filt and 'zoom_lims' in filt:
+            
+            axins = ax.inset_axes(filt['inset_pos'])
+            
+            # Call plotting function for inset
+            build_isochrone_multi(
+                df=df, 
+                ax=axins, 
+                target_ages=target_ages,
+                target_masses=target_masses, 
+                x_var=filt['x_var'], 
+                y_var=filt['y_var'], 
+                x_title="", 
+                y_title="", 
+                invert_y=filt.get('invert_y', True), 
+                invert_x=filt.get('invert_x', False),
+                inset_zoom_lims=filt['zoom_lims']
+            )
+            
+            # Apply manual data limits to zoomed box
+            x1, x2, y1, y2 = filt['zoom_lims']
+            axins.set_xlim(x1, x2)
+            axins.set_ylim(y1, y2)
+            
+            axins.set_xticklabels([])
+            axins.set_yticklabels([])
+            
+            rect, connectors = ax.indicate_inset_zoom(axins, edgecolor="black", alpha=0.5, zorder=1)
+            for line in connectors:
+                line.set_visible(False)
+
+        # --- 3. Add Shaded Regions & Legend ---
+        if 'shades' in filt:
+            has_labels = False 
+            
+            for shade in filt['shades']:
+                # Use .get() so it defaults to None if you completely forget to include the key
+                x_lims = shade.get('x_lims')
+                y_lims = shade.get('y_lims')
+                color = shade.get('color', 'gray')
+                alpha = shade.get('alpha', 0.25)
+                label = shade.get('label', '')
+                
+                if label:
+                    has_labels = True
+                
+                target_axes = [ax] if axins is None else [ax, axins]
+
+                for target_ax in target_axes:
+                    
+                    # Only assign the label to the main axis to prevent legend duplication
+                    current_label = label if target_ax == ax else "_nolegend_"
+                    
+                    if x_lims is not None and y_lims is not None:
+                        # Both constraints exist: Draw the bounded 2D target box
+                        x_sorted = sorted(x_lims)
+                        target_ax.fill_between(
+                            x_sorted, y_lims[0], y_lims[1], 
+                            color=color, alpha=alpha, zorder=0, label=current_label
+                        )
+                        
+                    elif x_lims is None and y_lims is not None:
+                        # Only magnitude constraints: Draw a horizontal band
+                        target_ax.axhspan(
+                            y_lims[0], y_lims[1], 
+                            color=color, alpha=alpha, zorder=0, label=current_label
+                        )
+                        
+                    elif y_lims is None and x_lims is not None:
+                        # Only temperature constraints: Draw a vertical band
+                        target_ax.axvspan(
+                            x_lims[0], x_lims[1], 
+                            color=color, alpha=alpha, zorder=0, label=current_label
+                        )
+            
+            if has_labels:
+                ax.legend(loc='upper right', fontsize=10, framealpha=0.9)
+
+    # --- Figure-Level Formatting ---
     fig.subplots_adjust(top=0.97, right=0.86, bottom=0.1, left=0.1, wspace=0.25, hspace=0.2)
-    
-    # Create a dedicated, absolute bounding box for the colorbar
     cbar_ax = fig.add_axes([0.88, 0.1, 0.04, 0.87])
     
-    # Draw the colorbar into that specific, isolated box
     cbar = fig.colorbar(scatter, cax=cbar_ax) 
     cbar.set_label(r'Stellar Mass ($M_{\odot}$)', fontsize=16)
     cbar.ax.tick_params(labelsize=14)
 
     # Save and display
     if savename is not None:
-        # Assumes 'saved' is defined globally in your script
-        plt.savefig(savedir+savename, dpi=600, bbox_inches='tight') 
+        plt.savefig(savedir + savename, dpi=600, bbox_inches='tight') 
     plt.show()
 
